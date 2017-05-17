@@ -54,6 +54,7 @@
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/ObjCARC.h"
+#include "llvm/Transforms/Instrumentation.h"
 #include <system_error>
 using namespace llvm;
 
@@ -76,7 +77,11 @@ cl::opt<bool> LTODiscardValueNames(
 #endif
     cl::Hidden);
 }
-
+/*
+static cl::opt<unsigned> FunctionPaddingBytes("randomize-function-list",
+                                  cl::desc("Number of bytes to use for function padding"),
+                                  cl::init(0));
+*/
 LTOCodeGenerator::LTOCodeGenerator(LLVMContext &Context)
     : Context(Context), MergedModule(new Module("ld-temp.o", Context)),
       TheLinker(new Linker(*MergedModule)) {
@@ -115,6 +120,10 @@ void LTOCodeGenerator::initializeLTOPasses() {
   initializeMemCpyOptPass(R);
   initializeDCEPass(R);
   initializeCFGSimplifyPassPass(R);
+  errs()<<"Initializing Code Padding Pass\n";
+  initializeCodePaddingPass(R);
+  initializeInsertVirtualizationLayerPass(R);
+
 }
 
 bool LTOCodeGenerator::addModule(LTOModule *Mod) {
@@ -551,8 +560,10 @@ bool LTOCodeGenerator::compileOptimized(ArrayRef<raw_pwrite_stream *> Out) {
   // If the bitcode files contain ARC code and were compiled with optimization,
   // the ObjCARCContractPass must be run, so do it unconditionally here.
   preCodeGenPasses.add(createObjCARCContractPass());
+  //TODO Add check to conditionally call;
+  //preCodeGenPasses.add(createCodePaddingPass(FunctionPaddingBytes));
   preCodeGenPasses.run(*MergedModule);
-
+  errs() << "Running preCodeGenPasses" <<"\n";
   // Re-externalize globals that may have been internalized to increase scope
   // for splitting
   restoreLinkageForExternals();
@@ -566,7 +577,7 @@ bool LTOCodeGenerator::compileOptimized(ArrayRef<raw_pwrite_stream *> Out) {
       splitCodeGen(std::move(MergedModule), Out, MCpu, FeatureStr, Options,
                    RelocModel, CodeModel::Default, CGOptLevel, FileType,
                    ShouldRestoreGlobalsLinkage);
-
+  errs() << "Code Gen Ran" <<"\n";
   // If statistics were requested, print them out after codegen.
   if (llvm::AreStatisticsEnabled())
     llvm::PrintStatistics();

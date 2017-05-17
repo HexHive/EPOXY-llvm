@@ -20,8 +20,10 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Support/RandomNumberGenerator.h"
 
 namespace llvm {
+class RandomNumberGenerator;
 
 class RegisterClassInfo {
   struct RCInfo {
@@ -39,6 +41,7 @@ class RegisterClassInfo {
     operator ArrayRef<MCPhysReg>() const {
       return makeArrayRef(Order.get(), NumRegs);
     }
+
   };
 
   // Brief cached information for each register class.
@@ -76,6 +79,8 @@ class RegisterClassInfo {
 
 public:
   RegisterClassInfo();
+  ~RegisterClassInfo();
+
 
   /// runOnFunction - Prepare to answer questions about MF. This must be called
   /// before any other methods are used.
@@ -137,8 +142,12 @@ public:
     return PSetLimits[Idx];
   }
 
+  void shuffle(RCInfo &RCI) const;
+
+
 protected:
   unsigned computePSetLimit(unsigned Idx) const;
+  RandomNumberGenerator * RandGen ;
 };
 } // end namespace llvm
 

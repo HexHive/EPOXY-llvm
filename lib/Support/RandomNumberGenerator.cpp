@@ -52,6 +52,37 @@ RandomNumberGenerator::RandomNumberGenerator(StringRef Salt) {
   Generator.seed(SeedSeq);
 }
 
+/*
+void RandomNumberGenerator::shuffle(SymbolTableList<Value> &list){
+    
+    SmallVector<Value *, 10> sv;
+    dbgs()<<"Normal Order\n" << "\n";
+    for (iterator itr=list.begin();
+              itr!=list.end();){
+      auto * I =list.remove(itr);
+      dbgs()<<I->getName() << "\n"; 
+      sv.push_back(I);
+      //M.getFunctionList().remove(&F);
+       
+    }
+    
+    dbgs()<<"Shuffled Functions\n" << "\n";
+    for (size_t i=sv.size()-1;i>0;i--){
+      size_t j=Generator();
+      std::swap(sv[i],sv[j]);
+      
+    }
+    
+    for (auto *I :sv){
+      list.push_back(I);
+      dbgs()<<I->getName() << "\n";  
+    }
+  }
+*/
+
+
+
+
 uint_fast64_t RandomNumberGenerator::operator()() {
   return Generator();
 }

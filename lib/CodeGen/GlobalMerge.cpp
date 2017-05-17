@@ -55,7 +55,7 @@
 // - it makes linker optimizations less useful (order files, LOHs, ...)
 // - it forces usage of indexed addressing (which isn't necessarily "free")
 // - it can increase register pressure when the uses are disparate enough.
-// 
+//
 // We use heuristics to discover the best global grouping we can (cf cl::opts).
 // ===---------------------------------------------------------------------===//
 
@@ -80,6 +80,7 @@
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
+#include "llvm/Support/RandomNumberGenerator.h"
 #include <algorithm>
 using namespace llvm;
 
@@ -104,6 +105,32 @@ static cl::opt<bool>
 EnableGlobalMergeOnConst("global-merge-on-const", cl::Hidden,
                          cl::desc("Enable global merge pass on constants"),
                          cl::init(false));
+
+static cl::opt<unsigned>
+MaxAddTraps("global-merge-max-add-traps",
+      cl::desc("Enable global adding traps after none constant arrays"),
+                    cl::init(0));
+
+/*static cl::opt<bool>
+EnableRandomizeGlobals("global-merge-randomize",
+      cl::desc("Randomize Location of Global Variables"),
+                    cl::init(false));
+*/
+static cl::opt<unsigned>
+OptionGlobalMaxPadSize("global-merge-pad-data",
+                       cl::desc("Max Number of bytes to add as padding"),
+                       cl::init(0));
+
+static cl::opt<unsigned>
+OptionGlobalMaxDataSectionPad("global-merge-max-data-section-pad",
+                              cl::desc("Max Number of bytes that can be added to the data section for padding"),
+                              cl::init(0));
+
+STATISTIC(NumTrapsAdded     , "Number of globals buffer traps added");
+STATISTIC(DataPadAdded      , "Number of uint32 variables add to .data");
+STATISTIC(BSSPadAdded      , "Number of uint32 variables add to .bss");
+STATISTIC(PreStackPadAdded      , "Number of uint32 variables added to .pre_stack_pad");
+STATISTIC(PreUnsafeStackPad      , "Number of uint32 variables added to .pre_unsafestack_pad");
 
 // FIXME: this could be a transitional option, and we probably need to remove
 // it if only we are sure this optimization could always benefit all targets.
@@ -131,12 +158,12 @@ namespace {
     bool MergeExternalGlobals;
 
     bool doMerge(SmallVectorImpl<GlobalVariable*> &Globals,
-                 Module &M, bool isConst, unsigned AddrSpace) const;
+                 Module &M, bool isConst, unsigned AddrSpace) ;
     /// \brief Merge everything in \p Globals for which the corresponding bit
     /// in \p GlobalSet is set.
     bool doMerge(const SmallVectorImpl<GlobalVariable *> &Globals,
                  const BitVector &GlobalSet, Module &M, bool isConst,
-                 unsigned AddrSpace) const;
+                 unsigned AddrSpace) ;
 
     /// \brief Check if the given variable has been identified as must keep
     /// \pre setMustKeepGlobalVariables must have been called on the Module that
@@ -171,6 +198,11 @@ namespace {
     bool runOnFunction(Function &F) override;
     bool doFinalization(Module &M) override;
 
+    //Used by doMerge to insert traps after arrays
+    void insertTrap(Module &M, std::vector<GlobalVariable *> &GVs);
+    void addTraps(Module &M);
+    void shuffleGlobals (Module & M);
+
     const char *getPassName() const override {
       return "Merge internal globals";
     }
@@ -179,6 +211,10 @@ namespace {
       AU.setPreservesCFG();
       FunctionPass::getAnalysisUsage(AU);
     }
+  private:
+    RandomNumberGenerator * RandGen;
+    int  NumTraps;
+    GlobalVariable *  LastTrap;
   };
 } // end anonymous namespace
 
@@ -188,18 +224,172 @@ INITIALIZE_PASS_BEGIN(GlobalMerge, "global-merge", "Merge global variables",
 INITIALIZE_PASS_END(GlobalMerge, "global-merge", "Merge global variables",
                     false, false)
 
+
+void GlobalMerge::insertTrap(Module &M, std::vector<GlobalVariable *> &GVs){
+    DEBUG(dbgs()<<"[global-merge] Inserting Trap------------------------\n");
+    Constant * NewInit;
+    Type * TrapType=LastTrap->getType()->getElementType();
+    GlobalVariable * NewTrap =new GlobalVariable(M,TrapType,false, GlobalVariable::InternalLinkage,
+        ConstantExpr::getNullValue(TrapType),"__data_traps_node");
+    NewTrap->setSection(".data");
+    NewTrap->setAlignment(4);
+    DEBUG(dbgs()<<"New Trap:\t\t";NewTrap->dump(); );
+
+    //Change initializer of LastTrap to Point to this one
+    NewInit= ConstantExpr::getBitCast(NewTrap,LastTrap->getType()->getElementType());
+    LastTrap->setInitializer(NewInit);
+    LastTrap->setSection(".data");
+
+
+    //Insert LastTrap to merged variables
+    GVs.push_back(LastTrap);
+
+    DEBUG(dbgs()<<"Inserted Trap:\t";LastTrap->dump(); );
+    //MergedGVs.push_back(LastTrap);
+    NumTrapsAdded++;
+    LastTrap=NewTrap;
+    DEBUG(dbgs()<<"[global-merge] Done Inserting Trap------------------------\n");
+}
+
+void GlobalMerge::addTraps(Module &M){
+    //Only the default address space gets trapped
+    // for now mark as used to keep from moving them
+    Type *Int32Ty = Type::getInt32Ty(M.getContext());
+    //Go though globals and identify all arrays or other types we want to trap
+    std::vector<GlobalVariable *> GlobalArrays;
+
+    for (auto &GV : M.globals()){
+      CompositeType *CT = dyn_cast<CompositeType>(GV.getType());
+      if (GV.getType()->getAddressSpace() != 0 || GV.hasSection()){
+        continue;
+      }
+      if (GV.isConstant()){
+        continue;
+      }
+      assert(CT && "Global variable is not a compositetype!");
+      DEBUG(dbgs()<<"Global Varibale is: "<<GV.getName()
+                 << " Num Contained Types? : "<<CT->getNumContainedTypes()
+                 << " Contained Type:  "<<CT->getContainedType(0)->isArrayTy()
+                  //<< " Type : "<< isa<ArrayType>(GV)
+                  <<"\n");
+      DEBUG(dbgs()<<"Type at 0 \n");
+      DEBUG(CT->getContainedType(0)->dump());
+      DEBUG(dbgs()<<"Var Dump\n");
+      DEBUG(GV.dump());
+
+      if (CT->getContainedType(0)->isArrayTy()){
+        DEBUG(dbgs()<<"\tIs Array: "<<"\n");
+        GlobalArrays.push_back(&GV);
+      }
+    }
+
+    //Drop Until less than Max Traps
+    while(GlobalArrays.size()> (MaxAddTraps/2)){
+      int remove_index = ((*RandGen)())%GlobalArrays.size();
+      DEBUG(dbgs()<<"Removing Index "<<remove_index<<"\n");
+      GlobalArrays.erase(GlobalArrays.begin()+remove_index);
+    }
+
+    //for each GlobalArray
+    for (GlobalVariable *GV : GlobalArrays){
+      std::vector<GlobalVariable *> GVs;
+      std::vector<Type*> Tys;
+      std::vector<Constant*> Inits;
+
+      //Add the Traps and array to a list
+      insertTrap(M,GVs);
+      GVs.push_back(GV);
+      insertTrap(M,GVs);
+
+
+      PointerType *PT = dyn_cast<PointerType>(GV->getType());
+      assert(PT && "Global variable is not a pointer!");
+      unsigned AddrSpace = PT->getAddressSpace();
+
+      for(unsigned i=0 ;i <GVs.size();i++){
+        Tys.push_back(GVs.at(i)->getType()->getElementType());
+        Inits.push_back(GVs.at(i)->getInitializer());
+      }
+
+      //Create Struct with var and traps
+      StructType *MergedTy = StructType::get(M.getContext(), Tys);
+      Constant *MergedInit = ConstantStruct::get(MergedTy, Inits);
+
+      GlobalVariable *MergedGV = new GlobalVariable(
+          M, MergedTy, GV->isConstant(), GlobalValue::PrivateLinkage, MergedInit,
+          "_TrappedGlobals", nullptr, GlobalVariable::NotThreadLocal, AddrSpace);
+      MergedGV->setSection(".data");
+      MergedGV->setAlignment(4);
+
+      for (unsigned i =0; i<GVs.size(); i++){
+        GlobalValue::LinkageTypes Linkage = GVs.at(i)->getLinkage();
+        std::string Name = GVs.at(i)->getName();
+
+        Constant *Idx[2] = {
+          ConstantInt::get(Int32Ty, 0),
+          ConstantInt::get(Int32Ty, i)
+        };
+
+        Constant *GEP =
+            ConstantExpr::getInBoundsGetElementPtr(MergedTy, MergedGV, Idx);
+        GVs.at(i)->replaceAllUsesWith(GEP);
+        GVs.at(i)->eraseFromParent();
+
+
+
+        // When the linkage is not internal we must emit an alias for the original
+        // variable name as it may be accessed from another object. On non-Mach-O
+        // we can also emit an alias for internal linkage as it's safe to do so.
+        // It's not safe on Mach-O as the alias (and thus the portion of the
+        // MergedGlobals variable) may be dead stripped at link time.
+        if (Linkage != GlobalValue::InternalLinkage ||
+            !TM->getTargetTriple().isOSBinFormatMachO()) {
+
+          //aliasing causes double counting of these vars in arm-none-eabi-size
+          GlobalAlias::create(Tys[i], AddrSpace, Linkage, Name, GEP, &M);
+
+        }
+      }
+      DEBUG(MergedGV->dump());
+    }
+
+    /* update count */
+
+    GlobalVariable * TrapCount=M.getNamedGlobal("__data_traps_count");
+    Constant * Init = ConstantInt::get(TrapCount->getType()->getElementType(),NumTrapsAdded);
+    TrapCount->setInitializer(Init);
+    //NumTrapsAdded=NumTraps;
+
+    /* last data_trap_key */
+    unsigned int rand_num = ((*RandGen)())%0xFFFFFFFF;
+    GlobalVariable * TrapKey=M.getNamedGlobal("__data_traps_key");
+    Init = ConstantInt::get(TrapKey->getType()->getElementType(),rand_num);
+    TrapKey->setInitializer(Init);
+
+    /* last data_trap_key */
+    GlobalVariable * TrapSecret=M.getNamedGlobal("__data_traps_secret_value");
+    TrapSecret->setSection(".data");
+    Init = ConstantInt::get(TrapSecret->getType()->getElementType(),((*RandGen)())%0xFFFFFFFF);
+    TrapSecret->setInitializer(Init);
+}
+
 bool GlobalMerge::doMerge(SmallVectorImpl<GlobalVariable*> &Globals,
-                          Module &M, bool isConst, unsigned AddrSpace) const {
+                          Module &M, bool isConst, unsigned AddrSpace)  {
   auto &DL = M.getDataLayout();
   // FIXME: Find better heuristics
-  std::stable_sort(Globals.begin(), Globals.end(),
+  if (!OptionGlobalMaxPadSize){
+    DEBUG(dbgs()<<"Not Randomizing Globals\n");
+    std::stable_sort(Globals.begin(), Globals.end(),
                    [&DL](const GlobalVariable *GV1, const GlobalVariable *GV2) {
                      return DL.getTypeAllocSize(GV1->getValueType()) <
                             DL.getTypeAllocSize(GV2->getValueType());
                    });
+  }
 
   // If we want to just blindly group all globals together, do so.
-  if (!GlobalMergeGroupByUse) {
+  if (!GlobalMergeGroupByUse || OptionGlobalMaxPadSize) {
+  //if (!GlobalMergeGroupByUse){
+    DEBUG(dbgs()<<"Randomizing Globals \n");
     BitVector AllGlobals(Globals.size());
     AllGlobals.set();
     return doMerge(Globals, AllGlobals, M, isConst, AddrSpace);
@@ -407,30 +597,35 @@ bool GlobalMerge::doMerge(SmallVectorImpl<GlobalVariable*> &Globals,
 
 bool GlobalMerge::doMerge(const SmallVectorImpl<GlobalVariable *> &Globals,
                           const BitVector &GlobalSet, Module &M, bool isConst,
-                          unsigned AddrSpace) const {
+                          unsigned AddrSpace)  {
   assert(Globals.size() > 1);
 
   Type *Int32Ty = Type::getInt32Ty(M.getContext());
   auto &DL = M.getDataLayout();
 
   DEBUG(dbgs() << " Trying to merge set, starts with #"
-               << GlobalSet.find_first() << "\n");
+               << GlobalSet.find_first() << "\n" );
+
 
   ssize_t i = GlobalSet.find_first();
   while (i != -1) {
+    DEBUG(dbgs()<<"Merging Vars" <<"\n");
     ssize_t j = 0;
     uint64_t MergedSize = 0;
     std::vector<Type*> Tys;
     std::vector<Constant*> Inits;
+    bool last_was_array =false;
 
     for (j = i; j != -1; j = GlobalSet.find_next(j)) {
       Type *Ty = Globals[j]->getValueType();
       MergedSize += DL.getTypeAllocSize(Ty);
       if (MergedSize > MaxOffset) {
-        break;
+          break;
       }
       Tys.push_back(Ty);
       Inits.push_back(Globals[j]->getInitializer());
+      last_was_array = false;
+
     }
 
     StructType *MergedTy = StructType::get(M.getContext(), Tys);
@@ -508,14 +703,138 @@ void GlobalMerge::setMustKeepGlobalVariables(Module &M) {
   }
 }
 
+void GlobalMerge::shuffleGlobals (Module & M){
+
+  SmallVector<GlobalVariable *, 10> sv;
+  DEBUG(dbgs()<<"Shuffling Globals\n" << "\n");
+  for (iplist<GlobalVariable>::iterator itr=M.getGlobalList().begin();
+            itr!=M.getGlobalList().end();){
+    GlobalVariable * G = M.getGlobalList().remove(itr);
+    //DEBUG(dbgs()<<G->getName() << "\n");
+    sv.push_back(G);
+    //M.getFunctionList().remove(&F);
+
+  }
+
+  //DEBUG(dbgs()<<"Shuffled Functions\n" << "\n");
+  for (size_t i=sv.size()-1;i>0;i--){
+    size_t j=((*RandGen)())%i;
+    std::swap(sv[i],sv[j]);
+
+  }
+
+  for (GlobalVariable *G :sv){
+    M.getGlobalList().push_back(G);
+    //DEBUG(dbgs()<<G->getName() << "\n");
+  }
+}
+
 bool GlobalMerge::doInitialization(Module &M) {
+
   if (!EnableGlobalMerge)
     return false;
+
+  RandGen=M.createRNG(this);
+
 
   auto &DL = M.getDataLayout();
   DenseMap<unsigned, SmallVector<GlobalVariable*, 16> > Globals, ConstGlobals,
                                                         BSSGlobals;
   bool Changed = false;
+  PreUnsafeStackPad = 0;
+  NumTrapsAdded= 0;
+  PreStackPadAdded = 0;
+  DataPadAdded = 0;
+  BSSPadAdded = 0;
+
+
+  if (MaxAddTraps){
+    DEBUG(dbgs()<< "In Global Merge\n");
+    GlobalVariable * TrapHead;
+    Constant * HeadNewInit;
+    TrapHead=dyn_cast_or_null<GlobalVariable>(M.getOrInsertGlobal("__data_traps_head",Type::getInt32PtrTy(M.getContext())));
+    DEBUG(dbgs()<< "global-merge: ");
+    DEBUG(TrapHead->dump());
+    LastTrap =new GlobalVariable(M,TrapHead->getType()->getElementType(),
+                   false, GlobalVariable::InternalLinkage,
+        ConstantExpr::getNullValue(TrapHead->getType()->getElementType()),"__data_traps_node");
+    LastTrap->setSection(".data");
+    NumTraps=1;  //Added Last Trap, + Head
+    HeadNewInit= ConstantExpr::getBitCast(LastTrap,LastTrap->getType()->getElementType());
+    TrapHead->setInitializer(HeadNewInit);
+    DEBUG(TrapHead->dump());
+
+    addTraps(M);
+    shuffleGlobals(M);
+
+  }
+
+  if (OptionGlobalMaxPadSize!=0){
+    int max_data_pads;
+    if(!OptionGlobalMaxDataSectionPad || OptionGlobalMaxDataSectionPad> OptionGlobalMaxPadSize){
+      max_data_pads = OptionGlobalMaxPadSize;
+    }else{
+      max_data_pads =OptionGlobalMaxDataSectionPad ;
+    }
+
+    int num_pads = 0;
+    int data_pads = (*RandGen)()% (max_data_pads/4);
+    num_pads += data_pads;
+    int bss_pads = (*RandGen)()%((OptionGlobalMaxPadSize - num_pads)/4);
+    num_pads += bss_pads;
+
+    int pre_stack_pad = (*RandGen)()%((OptionGlobalMaxPadSize - num_pads)/4);
+    num_pads += pre_stack_pad;
+
+
+    int pre_unsafestack_pad = (*RandGen)()%((OptionGlobalMaxPadSize - num_pads)/4);
+    num_pads += pre_unsafestack_pad;
+
+
+    for(int i =0;i<pre_stack_pad;i++){
+      //DEBUG(dbgs()<<"Creating pre_stack_pad Vars\n");
+      GlobalVariable *PadGV = new GlobalVariable(M,Type::getInt32Ty(M.getContext()),
+                       false, GlobalVariable::InternalLinkage,
+                       ConstantInt::get(Type::getInt32Ty(M.getContext()),0),"__pre_stack_pad");
+      PadGV->setSection(".prestack");
+    }
+
+    for(int i =0;i<pre_unsafestack_pad;i++){
+      //DEBUG(dbgs()<<"Creating pre_stack_pad Vars\n");
+      GlobalVariable *PadGV = new GlobalVariable(M,Type::getInt32Ty(M.getContext()),
+                       false, GlobalVariable::InternalLinkage,
+                       ConstantInt::get(Type::getInt32Ty(M.getContext()),0),"__pre_unsafestack_pad");
+      PadGV->setSection(".preunsafestack");
+    }
+
+    for(int i =0;i<bss_pads;i++){
+      //DEBUG(dbgs()<<"Creating BSS Vars\n");
+      GlobalVariable *PadGV = new GlobalVariable(M,Type::getInt32Ty(M.getContext()),
+                       false, GlobalVariable::InternalLinkage,
+                       ConstantInt::get(Type::getInt32Ty(M.getContext()),0),"__bss_pad");
+      PadGV->setSection(".bss");
+    }
+    //Data Pads
+    for(int i =0;i<data_pads;i++){
+      int rand = (*RandGen)() %0xFFFFFFFF;
+      //DEBUG(dbgs()<<"Creating Data Vars\n");
+      GlobalVariable *PadGV = new GlobalVariable(M,Type::getInt32Ty(M.getContext()),
+                       false, GlobalVariable::InternalLinkage,
+                     ConstantInt::get(Type::getInt32Ty(M.getContext()),rand),"__data_pad");
+      PadGV->setSection(".data");
+
+    }
+    //Update Stats
+    PreUnsafeStackPad = pre_unsafestack_pad;
+    PreStackPadAdded = pre_stack_pad;
+    DataPadAdded = data_pads;
+    BSSPadAdded = bss_pads;
+   shuffleGlobals(M);
+
+  }
+
+
+
   setMustKeepGlobalVariables(M);
 
   // Grab all non-const globals.

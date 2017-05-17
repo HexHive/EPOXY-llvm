@@ -95,6 +95,15 @@ struct InstrProfOptions {
   std::string InstrProfileOutput;
 };
 
+// createCodePaddingPass - Create and return a pass that adds a the specified number of functions that
+// call __default_invalid_addr_handler.  Creating the function if needed.  The function never returns
+// causing the program to halt in the event that illegal code is executed.
+ModulePass *createCodePaddingPass(unsigned num_bytes=0);
+
+
+ModulePass * createInsertVirtualizationLayerPass();
+
+
 /// Insert frontend instrumentation based profiling.
 ModulePass *createInstrProfilingPass(
     const InstrProfOptions &Options = InstrProfOptions());

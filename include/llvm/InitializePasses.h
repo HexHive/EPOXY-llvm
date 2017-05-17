@@ -89,6 +89,9 @@ void initializeCFGOnlyViewerPass(PassRegistry&);
 void initializeCFGPrinterPass(PassRegistry&);
 void initializeCFGSimplifyPassPass(PassRegistry&);
 void initializeCFLAAWrapperPassPass(PassRegistry&);
+
+
+void initializeInsertVirtualizationLayerPass(PassRegistry&);
 void initializeExternalAAWrapperPassPass(PassRegistry&);
 void initializeForwardControlFlowIntegrityPass(PassRegistry&);
 void initializeFlattenCFGPassPass(PassRegistry&);
@@ -324,6 +327,7 @@ void initializeLoopLoadEliminationPass(PassRegistry&);
 void initializeFunctionImportPassPass(PassRegistry &);
 void initializeLoopVersioningPassPass(PassRegistry &);
 void initializeWholeProgramDevirtPass(PassRegistry &);
+void initializeCodePaddingPass(PassRegistry &);
 }
 
 #endif

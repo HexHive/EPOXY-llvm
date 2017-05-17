@@ -412,8 +412,8 @@ void PassManagerBuilder::populateModulePassManager(
   // Scheduling LoopVersioningLICM when inlining is over, because after that
   // we may see more accurate aliasing. Reason to run this late is that too
   // early versioning may prevent further inlining due to increase of code
-  // size. By placing it just after inlining other optimizations which runs 
-  // later might get benefit of no-alias assumption in clone loop. 
+  // size. By placing it just after inlining other optimizations which runs
+  // later might get benefit of no-alias assumption in clone loop.
   if (UseLoopVersioningLICM) {
     MPM.add(createLoopVersioningLICMPass());    // Do LoopVersioningLICM
     MPM.add(createLICMPass());                  // Hoist loop invariants
@@ -756,8 +756,14 @@ void PassManagerBuilder::populateLTOPassManager(legacy::PassManagerBase &PM) {
   // is enabled. The pass does nothing if CFI is disabled.
   PM.add(createLowerBitSetsPass());
 
+  //added clemen19
+
   if (OptLevel != 0)
     addLateLTOOptimizationPasses(PM);
+
+  PM.add(createCodePaddingPass());
+  PM.add(createInsertVirtualizationLayerPass());
+  
 
   if (VerifyOutput)
     PM.add(createVerifierPass());

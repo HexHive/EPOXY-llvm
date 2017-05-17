@@ -32,6 +32,9 @@ def ByVal : EnumAttr<"byval">;
 /// Marks function as being in a cold path.
 def Cold : EnumAttr<"cold">;
 
+/// Used for variable to make sure it doesn't get merges/padded.
+def NoMerge : EnumAttr<"nomerge">;
+
 /// Can only be moved to control-equivalent blocks.
 def Convergent : EnumAttr<"convergent">;
 

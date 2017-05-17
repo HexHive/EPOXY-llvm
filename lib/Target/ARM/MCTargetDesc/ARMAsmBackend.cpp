@@ -205,7 +205,7 @@ const char *ARMAsmBackend::reasonForFixupRelaxation(const MCFixup &Fixup,
     // Relax if the value is too big for a (signed) i8.
     int64_t Offset = int64_t(Value) - 4;
     if (Offset > 2046 || Offset < -2048)
-      return "out of range pc-relative fixup value";
+      return "ARM::fixup_arm_thumb_br out of range pc-relative fixup value";
     break;
   }
   case ARM::fixup_arm_thumb_bcc: {
@@ -217,7 +217,7 @@ const char *ARMAsmBackend::reasonForFixupRelaxation(const MCFixup &Fixup,
     // Relax if the value is too big for a (signed) i8.
     int64_t Offset = int64_t(Value) - 4;
     if (Offset > 254 || Offset < -256)
-      return "out of range pc-relative fixup value";
+      return "ARM::fixup_arm_thumb_bcc: out of range pc-relative fixup value";
     break;
   }
   case ARM::fixup_thumb_adr_pcrel_10:
@@ -226,9 +226,9 @@ const char *ARMAsmBackend::reasonForFixupRelaxation(const MCFixup &Fixup,
     // of four, the wide version of the instruction must be used.
     int64_t Offset = int64_t(Value) - 4;
     if (Offset & 3)
-      return "misaligned pc-relative fixup value";
+      return "ARM::fixup_arm_thumb_cp: misaligned pc-relative fixup value";
     else if (Offset > 1020 || Offset < 0)
-      return "out of range pc-relative fixup value";
+      return "ARM::fixup_arm_thumb_cp: out of range pc-relative fixup value";
     break;
   }
   case ARM::fixup_arm_thumb_cb: {
@@ -405,7 +405,7 @@ unsigned ARMAsmBackend::adjustFixupValue(const MCFixup &Fixup, uint64_t Value,
       isAdd = false;
     }
     if (Ctx && Value >= 4096) {
-      Ctx->reportError(Fixup.getLoc(), "out of range pc-relative fixup value");
+      Ctx->reportError(Fixup.getLoc(), "ARM::fixup_t2_ldst_pcrel_12 out of range pc-relative fixup value");
       return 0;
     }
     Value |= isAdd << 23;
@@ -426,7 +426,7 @@ unsigned ARMAsmBackend::adjustFixupValue(const MCFixup &Fixup, uint64_t Value,
       opc = 2; // 0b0010
     }
     if (Ctx && ARM_AM::getSOImmVal(Value) == -1) {
-      Ctx->reportError(Fixup.getLoc(), "out of range pc-relative fixup value");
+      Ctx->reportError(Fixup.getLoc(), "ARM::fixup_arm_adr_pcrel_12 out of range pc-relative fixup value");
       return 0;
     }
     // Encode the immediate and shift the opcode into place.
@@ -601,7 +601,7 @@ unsigned ARMAsmBackend::adjustFixupValue(const MCFixup &Fixup, uint64_t Value,
     }
     // The value has the low 4 bits encoded in [3:0] and the high 4 in [11:8].
     if (Ctx && Value >= 256) {
-      Ctx->reportError(Fixup.getLoc(), "out of range pc-relative fixup value");
+      Ctx->reportError(Fixup.getLoc(), "ARM::fixup_arm_pcrel_10_unscaled out of range pc-relative fixup value");
       return 0;
     }
     Value = (Value & 0xf) | ((Value & 0xf0) << 4);
@@ -622,7 +622,7 @@ unsigned ARMAsmBackend::adjustFixupValue(const MCFixup &Fixup, uint64_t Value,
     // These values don't encode the low two bits since they're always zero.
     Value >>= 2;
     if (Ctx && Value >= 256) {
-      Ctx->reportError(Fixup.getLoc(), "out of range pc-relative fixup value");
+      Ctx->reportError(Fixup.getLoc(), "ARM::fixup_t2_pcrel_10: out of range pc-relative fixup value");
       return 0;
     }
     Value |= isAdd << 23;
@@ -653,7 +653,7 @@ unsigned ARMAsmBackend::adjustFixupValue(const MCFixup &Fixup, uint64_t Value,
     }
     Value >>= 1;
     if (Ctx && Value >= 256) {
-      Ctx->reportError(Fixup.getLoc(), "out of range pc-relative fixup value");
+      Ctx->reportError(Fixup.getLoc(), "ARM::fixup_t2_pcrel_9: out of range pc-relative fixup value");
       return 0;
     }
     Value |= isAdd << 23;

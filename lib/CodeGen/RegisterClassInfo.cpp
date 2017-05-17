@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -29,8 +30,22 @@ static cl::opt<unsigned>
 StressRA("stress-regalloc", cl::Hidden, cl::init(0), cl::value_desc("N"),
          cl::desc("Limit all regclasses to N registers"));
 
+static cl::opt<bool>
+ShouldRandRegs("randomize-regalloc", cl::init(false), cl::value_desc("N"),
+         cl::desc("Randomize the Register Layout"));
+
 RegisterClassInfo::RegisterClassInfo()
-  : Tag(0), MF(nullptr), TRI(nullptr), CalleeSaved(nullptr) {}
+  : Tag(0), MF(nullptr), TRI(nullptr), CalleeSaved(nullptr) {
+    SmallString<32> Salt("regalloc");
+    //Salt += sys::path::filename(getModuleIdentifier());
+
+    RandGen = new RandomNumberGenerator(Salt);
+
+  }
+
+  RegisterClassInfo::~RegisterClassInfo(){
+    delete RandGen;
+  }
 
 void RegisterClassInfo::runOnMachineFunction(const MachineFunction &mf) {
   bool Update = false;
@@ -126,6 +141,14 @@ void RegisterClassInfo::compute(const TargetRegisterClass *RC) const {
     LastCost = Cost;
   }
 
+  //TODO Shuffle Register Order here  
+  //(Could change so Callee Save get randomized, and caller save get
+  //randomize)
+  if (ShouldRandRegs){
+    shuffle(RCI);
+  }
+
+
   // Register allocator stress test.  Clip register class to N registers.
   if (StressRA && RCI.NumRegs > StressRA)
     RCI.NumRegs = StressRA;
@@ -148,6 +171,28 @@ void RegisterClassInfo::compute(const TargetRegisterClass *RC) const {
 
   // RCI is now up-to-date.
   RCI.Tag = Tag;
+}
+
+void RegisterClassInfo::shuffle(RCInfo &RCI) const
+{
+  DEBUG(dbgs()<<"Shuffling Registers\n" << "\n");
+  SmallVector<unsigned,10> sv;
+  for (unsigned I = 0; I != RCI.NumRegs; ++I){
+    sv.push_back(RCI.Order[I]);     
+  }
+  
+  //DEBUG(dbgs()<<"Shuffled Functions\n" << "\n");
+  for (size_t i=sv.size()-1;i>0;i--){
+    size_t j=((*RandGen)())%i;
+    std::swap(sv[i],sv[j]);
+    
+  }
+
+  
+  for (unsigned I = 0; I != RCI.NumRegs; ++I){
+    RCI.Order[I]=sv[I];
+    
+  }
 }
 
 /// This is not accurate because two overlapping register sets may have some

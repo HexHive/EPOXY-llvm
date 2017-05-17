@@ -19,6 +19,11 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DataTypes.h" // Needed for uint64_t on Windows.
+#include <llvm/ADT/ilist.h>
+#include <llvm/ADT/SmallVector.h>
+#include "llvm/IR/SymbolTableListTraits.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/IR/Value.h"
 #include <random>
 
 namespace llvm {
@@ -33,6 +38,9 @@ class RandomNumberGenerator {
 public:
   /// Returns a random number in the range [0, Max).
   uint_fast64_t operator()();
+
+
+//void shuffle(SymbolTableList<Value> &list);
 
 private:
   /// Seeds and salts the underlying RNG engine.
@@ -52,6 +60,7 @@ private:
   RandomNumberGenerator &operator=(const RandomNumberGenerator &other) = delete;
 
   friend class Module;
+  friend class RegisterClassInfo;
 };
 }
 
